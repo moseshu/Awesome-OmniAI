@@ -1,0 +1,1 @@
+{"prompt":"User: 解释 LoRA\nAssistant:","chosen":"LoRA 通过低秩矩阵适配模型权重，只训练少量新增参数。","rejected":"LoRA 是一种数据库索引方法。"}

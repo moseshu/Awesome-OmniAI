@@ -1,0 +1,1 @@
+{"messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"介绍一下 LoRA。"},{"role":"assistant","content":"LoRA 是一种参数高效微调方法，通过训练低秩适配器减少显存和参数开销。"},{"role":"user","content":"它通常加在哪些层？"},{"role":"assistant","content":"通常加在 attention 和 MLP 的线性层，例如 q_proj、v_proj、o_proj、gate_proj、up_proj、down_proj。"}]}
