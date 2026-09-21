@@ -99,32 +99,60 @@ def render_chat(tokenizer, messages: list[dict[str, Any]], add_generation_prompt
     return "\n\n".join(rendered)
 
 
-def tokenize_sft_example(example: dict[str, Any], tokenizer, max_length: int, add_eos: bool, system_prompt: str | None):
-    messages = normalize_messages(example, system_prompt)
-    if not messages or messages[-1]["role"] != "assistant":
-        raise ValueError("SFT examples must include an assistant response.")
+def _tokenize_text(tokenizer, text: str, max_length: int) -> dict[str, list[int]]:
+    return tokenizer(text, truncation=True, max_length=max_length, add_special_tokens=False)
 
-    prompt_messages = messages[:-1]
-    answer_message = messages[-1]
+
+def _assistant_label_spans(messages: list[dict[str, Any]], tokenizer, max_length: int, tools: Any, strategy: str) -> list[tuple[int, int]]:
+    assistant_indexes = [index for index, message in enumerate(messages) if message["role"] == "assistant"]
+    if strategy == "last_assistant":
+        assistant_indexes = assistant_indexes[-1:]
+    elif strategy != "all_assistant":
+        raise ValueError(f"Unsupported label_masking_strategy: {strategy}")
+
+    spans: list[tuple[int, int]] = []
+    for index in assistant_indexes:
+        prefix_text = render_chat(tokenizer, messages[:index], add_generation_prompt=True, tools=tools)
+        end_text = render_chat(tokenizer, messages[: index + 1], add_generation_prompt=False, tools=tools)
+        start = len(_tokenize_text(tokenizer, prefix_text, max_length)["input_ids"])
+        end = len(_tokenize_text(tokenizer, end_text, max_length)["input_ids"])
+        if start < max_length and end > start:
+            spans.append((start, min(end, max_length)))
+    return spans
+
+
+def tokenize_sft_example(
+    example: dict[str, Any],
+    tokenizer,
+    max_length: int,
+    add_eos: bool,
+    system_prompt: str | None,
+    label_masking_strategy: str = "last_assistant",
+):
+    messages = normalize_messages(example, system_prompt)
+    if not messages or not any(message["role"] == "assistant" for message in messages):
+        raise ValueError("SFT examples must include at least one assistant response.")
+
     tools = example.get("tools")
-    prompt_text = render_chat(tokenizer, prompt_messages, add_generation_prompt=True, tools=tools)
     full_text = render_chat(tokenizer, messages, add_generation_prompt=False, tools=tools)
     if add_eos and tokenizer.eos_token and not full_text.endswith(tokenizer.eos_token):
         full_text += tokenizer.eos_token
 
-    full = tokenizer(full_text, truncation=True, max_length=max_length, add_special_tokens=False)
-    prompt = tokenizer(prompt_text, truncation=True, max_length=max_length, add_special_tokens=False)
+    full = _tokenize_text(tokenizer, full_text, max_length)
     labels = list(full["input_ids"])
-    prompt_len = min(len(prompt["input_ids"]), len(labels))
-    labels[:prompt_len] = [IGNORE_INDEX] * prompt_len
+    spans = _assistant_label_spans(messages, tokenizer, max_length, tools, label_masking_strategy)
+    mask = [False] * len(labels)
+    for start, end in spans:
+        for position in range(start, min(end, len(mask))):
+            mask[position] = True
+    labels = [token_id if mask[index] else IGNORE_INDEX for index, token_id in enumerate(labels)]
+    if add_eos and tokenizer.eos_token_id is not None and labels and labels[-1] == IGNORE_INDEX and full["input_ids"][-1] == tokenizer.eos_token_id:
+        labels[-1] = tokenizer.eos_token_id
     if all(label == IGNORE_INDEX for label in labels):
-        answer = tokenizer(answer_message["content"], truncation=True, max_length=max_length, add_special_tokens=False)
-        input_ids = (prompt["input_ids"] + answer["input_ids"])[:max_length]
-        attention_mask = [1] * len(input_ids)
-        labels = [IGNORE_INDEX] * min(len(prompt["input_ids"]), len(input_ids))
-        labels += input_ids[len(labels) :]
-        labels = labels[: len(input_ids)]
-        return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+        raise ValueError(
+            "No assistant tokens remained after truncation. "
+            "Increase max_seq_length or shorten the prompt/tool context."
+        )
     full["labels"] = labels
     return full
 

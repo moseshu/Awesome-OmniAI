@@ -87,6 +87,7 @@ class TrainConfig:
     max_seq_length: int = 4096
     packing: bool = False
     add_eos_token: bool = True
+    label_masking_strategy: str = "last_assistant"
     system_prompt: Optional[str] = None
     chat_template: Optional[str] = None
     model_family: str = "auto"

@@ -1,8 +1,8 @@
-task_type: function_calling
-model_name_or_path: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
-model_family: deepseek
-data_path: data/function_calling.jsonl
-output_dir: outputs/deepseek-function-calling-lora
+task_type: sft
+model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+model_family: qwen
+data_path: data/mixed_sft_function_calling.jsonl
+output_dir: outputs/qwen-mixed-sft-function-calling-lora
 max_seq_length: 4096
 label_masking_strategy: all_assistant
 use_lora: true

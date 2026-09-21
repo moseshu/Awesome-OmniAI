@@ -76,6 +76,17 @@ GRPO currently expects prompts:
 
 Replace `RewardFunction` in `common/trainers.py` before real GRPO training; the default reward is only a placeholder.
 
+SFT and function-calling records can be mixed in the same JSONL file as long as each record follows one of the accepted schemas. For mixed chat/tool-call data, set:
+
+```yaml
+label_masking_strategy: all_assistant
+```
+
+Masking options:
+
+- `last_assistant`: train only the final assistant message. This is the default for ordinary instruction/SFT data.
+- `all_assistant`: train every assistant message, including intermediate tool-call messages. Use this for function-calling or mixed SFT + function-calling data when tool call generation should be learned.
+
 `llm-training/data` contains:
 
 - format docs for SFT, instruction tuning, pretraining, function calling, DPO, and GRPO
@@ -103,7 +114,7 @@ Use `save_only_model: false` if you want resumable checkpoints with optimizer/sc
 Single node:
 
 ```bash
-accelerate launch llm-training/sft/train.py --config llm-training/configs/sft_qwen_lora.yaml
+accelerate launch llm-training/sft/train.py --config llm-training/configs/sft_lora.yaml
 ```
 
 Torchrun multi-node:
@@ -116,7 +127,7 @@ torchrun \
   --master_addr 10.0.0.1 \
   --master_port 29500 \
   llm-training/sft/train.py \
-  --config llm-training/configs/sft_qwen_lora.yaml
+  --config llm-training/configs/sft_lora.yaml
 ```
 
 Accelerate FSDP:
@@ -125,7 +136,7 @@ Accelerate FSDP:
 accelerate launch \
   --config_file llm-training/configs/accelerate/fsdp_lora_multinode.yaml \
   llm-training/sft/train.py \
-  --config llm-training/configs/sft_qwen_lora.yaml
+  --config llm-training/configs/sft_lora.yaml
 ```
 
 Available distributed config templates:
@@ -176,7 +187,7 @@ Override any YAML field from CLI:
 
 ```bash
 accelerate launch llm-training/sft/train.py \
-  --config llm-training/configs/sft_qwen_lora.yaml \
+  --config llm-training/configs/sft_lora.yaml \
   --model_name_or_path /models/Qwen2.5-14B-Instruct \
   --data_path /data/my_sft.jsonl \
   --output_dir /checkpoints/qwen-sft

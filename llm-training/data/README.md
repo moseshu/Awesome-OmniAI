@@ -20,6 +20,13 @@ For SFT, labels are masked as follows:
 
 This differs from pretraining-style SFT where prompt and answer are both labels.
 
+`label_masking_strategy` controls which assistant turns are trained:
+
+- `last_assistant`: only the final assistant message is trained.
+- `all_assistant`: every assistant message is trained.
+
+Use `all_assistant` when mixing ordinary SFT and function-calling data, or when the dataset should teach the model to emit tool calls.
+
 ## SFT: Instruction Tuning
 
 Alpaca-style records are also supported.
@@ -49,6 +56,8 @@ Function-calling data should use `messages` and may include `tools`, `tool_calls
 ```
 
 Function-calling uses the same response-only SFT masking. If the final assistant message is the target answer, earlier tool messages are prompt context.
+
+For tool-call generation, set `label_masking_strategy: all_assistant`; otherwise an intermediate assistant `tool_calls` message is treated as context and only the final assistant answer is trained.
 
 ## DPO
 

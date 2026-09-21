@@ -137,14 +137,28 @@ def prepare_dataset(config: TrainConfig, tokenizer):
         return train_data, None
 
     train_data = train_raw.map(
-        lambda item: tokenize_sft_example(item, tokenizer, config.max_seq_length, config.add_eos_token, config.system_prompt),
+        lambda item: tokenize_sft_example(
+            item,
+            tokenizer,
+            config.max_seq_length,
+            config.add_eos_token,
+            config.system_prompt,
+            config.label_masking_strategy,
+        ),
         remove_columns=list(train_raw.column_names),
         desc=f"Tokenizing {config.task_type} data",
     )
     eval_data = None
     if eval_raw is not None:
         eval_data = eval_raw.map(
-            lambda item: tokenize_sft_example(item, tokenizer, config.max_seq_length, config.add_eos_token, config.system_prompt),
+            lambda item: tokenize_sft_example(
+                item,
+                tokenizer,
+                config.max_seq_length,
+                config.add_eos_token,
+                config.system_prompt,
+                config.label_masking_strategy,
+            ),
             remove_columns=list(eval_raw.column_names),
             desc=f"Tokenizing eval {config.task_type} data",
         )
