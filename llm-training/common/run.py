@@ -8,6 +8,8 @@ import inspect
 from dataclasses import replace
 
 from transformers import TrainingArguments, Trainer, set_seed
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from transformers import TrainerCallback
 
 CURRENT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = CURRENT_DIR.parent
@@ -29,6 +31,26 @@ from common.modeling import load_model, load_model_and_tokenizer
 from common.trainers import DPOTrainer, GRPOTrainer
 
 
+class SavePeftCheckpointCallback(TrainerCallback):
+    def on_save(self, args, state, control, **kwargs):
+        model = kwargs.get("model")
+        if model is None or not hasattr(model, "peft_config"):
+            return control
+        checkpoint_dir = Path(args.output_dir) / f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}"
+        model.save_pretrained(checkpoint_dir)
+        for filename in ("pytorch_model.bin", "model.safetensors"):
+            path = checkpoint_dir / filename
+            if path.exists():
+                path.unlink()
+        return control
+
+    def on_train_end(self, args, state, control, **kwargs):
+        model = kwargs.get("model")
+        if model is not None and hasattr(model, "peft_config"):
+            model.save_pretrained(args.output_dir)
+        return control
+
+
 def training_args(config: TrainConfig) -> TrainingArguments:
     kwargs = {
         "output_dir": config.output_dir,
@@ -48,8 +70,9 @@ def training_args(config: TrainConfig) -> TrainingArguments:
         "logging_steps": config.logging_steps,
         "save_steps": config.save_steps,
         "eval_steps": config.eval_steps,
-        "save_strategy": "steps",
+        "save_strategy": config.save_strategy,
         "save_total_limit": config.save_total_limit,
+        "save_on_each_node": config.save_on_each_node,
         "report_to": config.report_to,
         "remove_unused_columns": config.remove_unused_columns,
         "ddp_find_unused_parameters": config.ddp_find_unused_parameters,
@@ -58,9 +81,13 @@ def training_args(config: TrainConfig) -> TrainingArguments:
         "hub_model_id": config.hub_model_id,
         "gradient_checkpointing": config.gradient_checkpointing,
     }
+    if config.deepspeed_config:
+        kwargs["deepspeed"] = config.deepspeed_config
     eval_value = "steps" if config.validation_split or config.eval_data_path else "no"
     signature = inspect.signature(TrainingArguments.__init__)
     kwargs["eval_strategy" if "eval_strategy" in signature.parameters else "evaluation_strategy"] = eval_value
+    if "save_only_model" in signature.parameters:
+        kwargs["save_only_model"] = config.save_only_model
     return TrainingArguments(**kwargs)
 
 
@@ -171,6 +198,9 @@ def run_training(default_task: str):
             data_collator=CausalLMCollator(tokenizer),
             tokenizer=tokenizer,
         )
+
+    if config.use_lora:
+        trainer.add_callback(SavePeftCheckpointCallback())
 
     resume = os.environ.get("RESUME_FROM_CHECKPOINT") or None
     result = trainer.train(resume_from_checkpoint=resume)

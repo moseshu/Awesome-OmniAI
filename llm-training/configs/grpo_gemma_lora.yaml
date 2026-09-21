@@ -20,5 +20,8 @@ grpo_max_new_tokens: 256
 grpo_temperature: 0.7
 grpo_kl_coef: 0.02
 logging_steps: 1
+save_strategy: steps
 save_steps: 200
+save_total_limit: 3
+save_only_model: false
 report_to: tensorboard

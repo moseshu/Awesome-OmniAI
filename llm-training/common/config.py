@@ -96,6 +96,7 @@ class TrainConfig:
     lora_alpha: int = 128
     lora_dropout: float = 0.05
     lora_target_modules: list[str] = field(default_factory=list)
+    lora_target_strategy: str = "family"
     lora_modules_to_save: list[str] = field(default_factory=list)
     resume_adapter_path: Optional[str] = None
     use_rslora: bool = False
@@ -108,6 +109,8 @@ class TrainConfig:
 
     torch_dtype: str = "bfloat16"
     attn_implementation: Optional[str] = "flash_attention_2"
+    tensor_parallel_plan: Optional[str] = None
+    deepspeed_config: Optional[str] = None
     gradient_checkpointing: bool = True
     trust_remote_code: bool = True
 
@@ -125,7 +128,10 @@ class TrainConfig:
     bf16: bool = True
     fp16: bool = False
     logging_steps: int = 10
+    save_strategy: str = "steps"
     save_steps: int = 500
+    save_only_model: bool = False
+    save_on_each_node: bool = False
     eval_steps: int = 500
     save_total_limit: int = 3
     report_to: str = "tensorboard"

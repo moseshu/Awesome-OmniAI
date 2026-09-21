@@ -1,21 +1,49 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 from typing import Any
 
 import torch
+from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from .config import TrainConfig
 
 
-FAMILY_TARGET_MODULES = {
+logger = logging.getLogger(__name__)
+
+
+COMMON_DECODER_TARGET_MODULES = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
+
+
+FAMILY_TARGET_MODULES: dict[str, list[str]] = {
     "qwen": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    "deepseek": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    "deepseek": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+        "q_a_proj",
+        "q_b_proj",
+        "kv_a_proj_with_mqa",
+        "kv_b_proj",
+    ],
     "gemma": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     "llama": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     "mistral": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    "mixtral": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    "mixtral": ["q_proj", "k_proj", "v_proj", "o_proj", "w1", "w2", "w3"],
 }
 
 
@@ -57,6 +85,59 @@ def build_quantization_config(config: TrainConfig):
     )
 
 
+def _is_lora_eligible_linear(module) -> bool:
+    if isinstance(module, nn.Linear):
+        return True
+    module_type = type(module).__name__.lower()
+    module_package = type(module).__module__.lower()
+    return "bitsandbytes" in module_package and "linear" in module_type
+
+
+def discover_linear_module_suffixes(model) -> set[str]:
+    suffixes: set[str] = set()
+    excluded = {"lm_head", "embed_tokens", "wte", "wpe"}
+    for name, module in model.named_modules():
+        if not _is_lora_eligible_linear(module):
+            continue
+        suffix = name.rsplit(".", 1)[-1]
+        if suffix not in excluded:
+            suffixes.add(suffix)
+    return suffixes
+
+
+def resolve_lora_target_modules(model, config: TrainConfig) -> list[str]:
+    if config.lora_target_modules:
+        requested = list(dict.fromkeys(config.lora_target_modules))
+        available = discover_linear_module_suffixes(model)
+        missing = [name for name in requested if name not in available]
+        if missing:
+            logger.warning("Configured LoRA target modules were not found in the model: %s", missing)
+        return requested
+
+    available = discover_linear_module_suffixes(model)
+    if config.lora_target_strategy == "all_linear":
+        return sorted(available)
+    if config.lora_target_strategy == "attention":
+        preferred = ["q_proj", "k_proj", "v_proj", "o_proj", "q_a_proj", "q_b_proj", "kv_a_proj_with_mqa", "kv_b_proj"]
+    elif config.lora_target_strategy == "family":
+        family = infer_model_family(config.model_name_or_path, config.model_family)
+        preferred = FAMILY_TARGET_MODULES.get(family, COMMON_DECODER_TARGET_MODULES)
+    else:
+        raise ValueError(f"Unsupported lora_target_strategy: {config.lora_target_strategy}")
+
+    targets = [name for name in preferred if name in available]
+    if not targets:
+        raise ValueError(
+            "No LoRA target modules matched this model. "
+            f"Available linear suffixes are: {sorted(available)}. "
+            "Set lora_target_modules explicitly or use lora_target_strategy: all_linear."
+        )
+    missing = [name for name in preferred if name not in available]
+    if missing:
+        logger.info("Skipping LoRA target modules not present in this model: %s", missing)
+    return targets
+
+
 def ensure_flash_attention_available(config: TrainConfig) -> str | None:
     if not config.attn_implementation:
         return None
@@ -92,6 +173,8 @@ def load_model(config: TrainConfig):
     quantization_config = build_quantization_config(config)
     if quantization_config:
         kwargs["quantization_config"] = quantization_config
+    if config.tensor_parallel_plan:
+        kwargs["tp_plan"] = config.tensor_parallel_plan
     model = AutoModelForCausalLM.from_pretrained(config.model_name_or_path, **kwargs)
     if config.gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -113,8 +196,8 @@ def apply_peft_if_needed(model, config: TrainConfig):
     if config.resume_adapter_path:
         return PeftModel.from_pretrained(model, config.resume_adapter_path, is_trainable=True)
 
-    family = infer_model_family(config.model_name_or_path, config.model_family)
-    target_modules = config.lora_target_modules or FAMILY_TARGET_MODULES[family]
+    target_modules = resolve_lora_target_modules(model, config)
+    logger.info("Using LoRA target modules: %s", target_modules)
     peft_config = LoraConfig(
         r=config.lora_r,
         lora_alpha=config.lora_alpha,

@@ -18,5 +18,8 @@ gradient_accumulation_steps: 16
 num_train_epochs: 1
 learning_rate: 0.00005
 logging_steps: 10
+save_strategy: steps
 save_steps: 500
+save_total_limit: 3
+save_only_model: false
 report_to: tensorboard

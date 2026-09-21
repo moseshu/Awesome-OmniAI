@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import json
 from itertools import chain
 from pathlib import Path
 from typing import Any
@@ -62,14 +64,25 @@ def normalize_messages(example: dict[str, Any], system_prompt: str | None = None
     return messages
 
 
-def render_chat(tokenizer, messages: list[dict[str, Any]], add_generation_prompt: bool = False) -> str:
+def render_chat(tokenizer, messages: list[dict[str, Any]], add_generation_prompt: bool = False, tools: Any = None) -> str:
     if getattr(tokenizer, "chat_template", None):
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=add_generation_prompt,
-        )
+        kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": add_generation_prompt,
+        }
+        signature = inspect.signature(tokenizer.apply_chat_template)
+        if tools is not None and "tools" in signature.parameters:
+            kwargs["tools"] = tools
+        elif tools is not None:
+            tool_message = {
+                "role": "system",
+                "content": "Available tools:\n" + json.dumps(tools, ensure_ascii=False),
+            }
+            messages = [tool_message] + messages
+        return tokenizer.apply_chat_template(messages, **kwargs)
     rendered: list[str] = []
+    if tools is not None:
+        rendered.append("Tools:\n" + json.dumps(tools, ensure_ascii=False))
     for message in messages:
         role = message["role"]
         content = message["content"]
@@ -93,8 +106,9 @@ def tokenize_sft_example(example: dict[str, Any], tokenizer, max_length: int, ad
 
     prompt_messages = messages[:-1]
     answer_message = messages[-1]
-    prompt_text = render_chat(tokenizer, prompt_messages, add_generation_prompt=True)
-    full_text = render_chat(tokenizer, messages, add_generation_prompt=False)
+    tools = example.get("tools")
+    prompt_text = render_chat(tokenizer, prompt_messages, add_generation_prompt=True, tools=tools)
+    full_text = render_chat(tokenizer, messages, add_generation_prompt=False, tools=tools)
     if add_eos and tokenizer.eos_token and not full_text.endswith(tokenizer.eos_token):
         full_text += tokenizer.eos_token
 
@@ -141,12 +155,14 @@ def tokenize_pretrain_batch(batch: dict[str, list[Any]], tokenizer, block_size: 
 
 def tokenize_preference_example(example: dict[str, Any], tokenizer, max_length: int, system_prompt: str | None):
     prompt = example.get("prompt")
-    if "messages" in example:
+    if isinstance(prompt, list):
+        prompt = render_chat(tokenizer, prompt, add_generation_prompt=True, tools=example.get("tools"))
+    elif "messages" in example:
         messages = normalize_messages({"messages": example["messages"]}, system_prompt)
-        prompt = render_chat(tokenizer, messages, add_generation_prompt=True)
+        prompt = render_chat(tokenizer, messages, add_generation_prompt=True, tools=example.get("tools"))
     elif not prompt:
         messages = normalize_messages(example, system_prompt)
-        prompt = render_chat(tokenizer, messages[:-1], add_generation_prompt=True)
+        prompt = render_chat(tokenizer, messages[:-1], add_generation_prompt=True, tools=example.get("tools"))
 
     prompt_ids = tokenizer(str(prompt), truncation=True, max_length=max_length, add_special_tokens=False)["input_ids"]
     response_budget = max(max_length - len(prompt_ids), 1)
