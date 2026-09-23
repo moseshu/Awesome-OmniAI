@@ -59,6 +59,29 @@ Function-calling uses the same response-only SFT masking. If the final assistant
 
 For tool-call generation, set `label_masking_strategy: all_assistant`; otherwise an intermediate assistant `tool_calls` message is treated as context and only the final assistant answer is trained.
 
+## Structured JSON Output with JSON Schema
+
+This is ordinary response-only SFT, not a separate training algorithm. Put the schema in the prompt/context and make the assistant target a raw JSON instance that conforms to it. Train on varied, validated examples, including optional fields, empty values, and boundary cases that matter to your application. Do not include Markdown fences or explanatory text in the target if the consumer expects JSON only.
+
+```json
+{"messages":[{"role":"system","content":"根据用户给出的 JSON Schema 提取信息。只输出符合 schema 的 JSON，不要输出 Markdown 或解释。"},{"role":"user","content":"Schema: {\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"count\":{\"type\":\"integer\",\"minimum\":0},\"urgent\":{\"type\":\"boolean\"}},\"required\":[\"title\",\"count\",\"urgent\"],\"additionalProperties\":false}\n\n从这段话提取信息：请准备 3 份报告，比较紧急。"},{"role":"assistant","content":"{\"title\":\"准备报告\",\"count\":3,\"urgent\":true}"}]}
+```
+
+Run it through the existing SFT trainer; no `function_calling` task type or tool-call messages are needed:
+
+```bash
+accelerate launch llm-training/sft/train.py \
+  --config llm-training/configs/sft_lora.yaml \
+  --data_path llm-training/data/json_schema.example.jsonl \
+  --output_dir outputs/qwen-json-schema-sft
+```
+
+In this setup, cross-entropy trains the assistant tokens (including JSON punctuation and values); the schema is conditioning context, not a separately optimized object. Fine-tuning improves the model's tendency to follow the format, but by itself it cannot guarantee valid JSON or schema compliance.
+
+For a hard syntax/shape guarantee at inference, combine SFT with schema-constrained decoding. A serving library compiles a supported JSON Schema subset into a grammar/automaton, then masks tokens that cannot continue a valid JSON value at each decoding step. Validate the final output against the full schema as a final check. Schema features supported by the decoder vary, so check its limits, especially for references, unions, and application-specific formats. Constrained decoding guarantees structure only to the extent the schema and decoder express it; it does not guarantee that extracted values are factually correct.
+
+Use `function_calling` when the model must select and invoke tools using the model's tool-call protocol. Use this JSON mode when the desired assistant response itself is a JSON object. In practice, a strong baseline is diverse schema-conditioned SFT plus constrained decoding and output validation; prompt-only JSON instructions are weaker, while preference/RL training is optional and usually not the first step.
+
 ## DPO
 
 DPO records contain a prompt, a chosen response, and a rejected response.
@@ -97,5 +120,7 @@ Supported `--task` values:
 - `function_calling`
 - `dpo`
 - `grpo`
+
+Structured JSON output uses `--task sft` and the SFT data format above; JSON Schema is not a separate normalizer or trainer in this repository.
 
 The converter is intentionally light: it validates required fields and emits normalized JSONL without tokenizing.

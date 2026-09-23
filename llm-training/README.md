@@ -76,6 +76,8 @@ GRPO currently expects prompts:
 
 Replace `RewardFunction` in `common/trainers.py` before real GRPO training; the default reward is only a placeholder.
 
+For schema-shaped JSON responses, use ordinary SFT with the JSON Schema in the prompt and a raw JSON assistant target; see [Structured JSON Output with JSON Schema](data/README.md#structured-json-output-with-json-schema) and [the example](data/json_schema.example.jsonl). This is separate from function calling: SFT teaches the response pattern, while schema-constrained decoding at inference time is what can enforce valid structure.
+
 SFT and function-calling records can be mixed in the same JSONL file as long as each record follows one of the accepted schemas. For mixed chat/tool-call data, set:
 
 ```yaml
@@ -120,23 +122,33 @@ accelerate launch llm-training/sft/train.py --config llm-training/configs/sft_lo
 Torchrun multi-node:
 
 ```bash
-torchrun \
+# Run this command on every node. Change only NODE_RANK.
+NODE_RANK=0 MASTER_ADDR=10.0.0.1 \
+  bash llm-training/scripts/launch_multinode.sh \
+  --mode torchrun \
+  --config llm-training/configs/sft_lora.yaml \
   --nnodes 2 \
-  --nproc_per_node 8 \
-  --node_rank 0 \
-  --master_addr 10.0.0.1 \
-  --master_port 29500 \
-  llm-training/sft/train.py \
-  --config llm-training/configs/sft_lora.yaml
+  --nproc-per-node 8
+
+NODE_RANK=1 MASTER_ADDR=10.0.0.1 \
+  bash llm-training/scripts/launch_multinode.sh \
+  --mode torchrun \
+  --config llm-training/configs/sft_lora.yaml \
+  --nnodes 2 \
+  --nproc-per-node 8
 ```
 
 Accelerate FSDP:
 
 ```bash
-accelerate launch \
-  --config_file llm-training/configs/accelerate/fsdp_lora_multinode.yaml \
-  llm-training/sft/train.py \
-  --config llm-training/configs/sft_lora.yaml
+# Run on every node. Set NODE_RANK to 0, 1, ... on each machine.
+NODE_RANK=0 MASTER_ADDR=10.0.0.1 \
+  bash llm-training/scripts/launch_multinode.sh \
+  --mode fsdp \
+  --accelerate-config llm-training/configs/accelerate/fsdp_lora_multinode.yaml \
+  --config llm-training/configs/sft_lora.yaml \
+  --nnodes 2 \
+  --nproc-per-node 8
 ```
 
 Available distributed config templates:
@@ -182,6 +194,29 @@ torchrun --nproc_per_node 8 \
 ```
 
 This requires model support in Transformers. If the model config has no tensor-parallel plan, use FSDP or DeepSpeed instead.
+
+### One launcher for all modes
+
+Use [scripts/launch_multinode.sh](scripts/launch_multinode.sh) for all multi-node modes:
+
+```bash
+# DeepSpeed ZeRO-3. The YAML may also set deepspeed_config directly.
+NODE_RANK=0 MASTER_ADDR=10.0.0.1 \
+  bash llm-training/scripts/launch_multinode.sh \
+  --mode deepspeed \
+  --deepspeed-config llm-training/configs/deepspeed/zero3.json \
+  --config llm-training/configs/sft_qwen_lora_deepspeed_zero3.yaml \
+  --nnodes 2 --nproc-per-node 8
+
+# Transformers native tensor parallelism.
+NODE_RANK=0 MASTER_ADDR=10.0.0.1 \
+  bash llm-training/scripts/launch_multinode.sh \
+  --mode tensor_parallel \
+  --config llm-training/configs/sft_qwen_lora_tensor_parallel.yaml \
+  --nnodes 1 --nproc-per-node 8
+```
+
+The launcher uses `torchrun` for `torchrun`, `deepspeed`, and `tensor_parallel` modes, and `accelerate launch` for `fsdp` mode. Every node must be able to reach `MASTER_ADDR:MASTER_PORT`, and all nodes must use the same code, model path, dataset path, and configuration.
 
 Override any YAML field from CLI:
 
